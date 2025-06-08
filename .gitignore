@@ -1,0 +1,30 @@
+# Ignore Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Ignore environment files
+.env
+.env.*
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore log files
+*.log
+
+# Ignore SQLite database
+*.db
+
+# Ignore zip and other archives
+*.zip
+*.tar
+*.tar.gz
+
+# Ignore local virtual environment
+venv/
+.envrc
+
+# VSCode settings (optional)
+.vscode/
