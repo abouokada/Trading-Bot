@@ -1,0 +1,42 @@
+from telegram.ext import Updater, CommandHandler
+from telegram import Bot
+from dotenv import load_dotenv
+import os
+
+# تحميل المفاتيح من ملف .env
+load_dotenv()
+
+# استرجاع المفاتيح من البيئة
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# دالة لتنفيذ أمر /start
+def start(update, context):
+    user = update.message.from_user
+    update.message.reply_text(f"مرحبًا {user.first_name}! 👋\nأنا بوت التداول الخاص بك. كيف يمكنني مساعدتك اليوم؟")
+    send_telegram_notification("بوت التداول يعمل الآن!")
+
+# دالة لإرسال إشعار إلى الـ Chat ID
+def send_telegram_notification(message):
+    bot = Bot(TOKEN)
+    bot.send_message(chat_id=CHAT_ID, text=message)
+
+# إعداد البوت
+def main():
+    # إنشاء Updater مع التوكن الخاص بالبوت
+    updater = Updater(TOKEN, use_context=True)
+
+    # الحصول على المحدثات
+    dispatcher = updater.dispatcher
+
+    # إضافة معالج لأمر /start
+    dispatcher.add_handler(CommandHandler("start", start))
+
+    # بدء البوت
+    updater.start_polling()
+
+    # اجعل البوت يعمل بشكل مستمر
+    updater.idle()
+
+if __name__ == '__main__':
+    main()

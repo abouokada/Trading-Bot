@@ -1,0 +1,244 @@
+import os
+import sqlite3
+import requests
+import time
+from datetime import datetime, timezone, timedelta
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import matplotlib.pyplot as plt
+import io
+import base64
+import smtplib
+from email.message import EmailMessage
+import talib
+import numpy as np
+
+# ÊÍãíá ÇáŞíã ÇáÍÓÇÓÉ ãä ÇáãÊÛíÑÇÊ ÇáÈíÆíÉ
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
+EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
+
+# ÅÚÏÇÏ ŞÇÚÏÉ ÇáÈíÇäÇÊ
+conn = sqlite3.connect('trading_bot.db', check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS trades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT,
+        symbol TEXT,
+        side TEXT,
+        quantity REAL,
+        entry_price REAL,
+        exit_price REAL,
+        result TEXT,
+        sentiment REAL
+    )
+''')
+conn.commit()
+
+DAILY_LOSS_LIMIT = -5.0
+MAX_OPEN_TRADES = 2
+open_trades = []
+last_report_date = None
+trade_executed_this_run = False
+last_trade_date = None
+
+analyzer = SentimentIntensityAnalyzer()
+
+TRAILING_STOP_PERCENT = 0.02
+MAX_TRADE_DURATION = timedelta(minutes=30)
+SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'FETUSDT', 'RNDRUSDT', 'LDOUSDT', 'ARBUSDT', 'NKNUSDT', 'AKROUSDT', 'ONGUSDT']
+
+manual_mode = False
+manual_symbol = ""
+manual_side = "buy"
+manual_quantity = 0.0
+
+# --- ÇáÏæÇá ÇáãÓÇÚÏÉ (placeholders) ---
+def get_real_price(symbol):
+    # ÊÓÊÑÌÚ ÇáÓÚÑ ÇáİÚáí ááÚãáÉ
+    return 100.0
+
+def analyze_sentiment(text):
+    score = analyzer.polarity_scores(text)
+    return score['compound']
+
+def send_telegram(message):
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
+
+def send_email_alert(subject, body):
+    if EMAIL_SENDER and EMAIL_PASSWORD and EMAIL_RECEIVER:
+        msg = EmailMessage()
+        msg.set_content(body)
+        msg['Subject'] = subject
+        msg['From'] = EMAIL_SENDER
+        msg['To'] = EMAIL_RECEIVER
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            smtp.send_message(msg)
+
+def get_today_profit():
+    return 0.0
+
+def choose_best_symbols():
+    return [(symbol, analyze_sentiment(symbol)) for symbol in SYMBOLS[:1]]
+
+def send_daily_report():
+    send_telegram("?? ÊŞÑíÑ íæãí: ÓíÊã ÅÑÓÇáå áÇÍŞğÇ")
+
+# ------------------------------
+
+def reset_daily_trade_flag():
+    global trade_executed_this_run, last_trade_date
+    today = datetime.now(timezone.utc).date()
+    if last_trade_date != today:
+        trade_executed_this_run = False
+        last_trade_date = today
+
+def execute_trades():
+    global open_trades, trade_executed_this_run
+    reset_daily_trade_flag()
+
+    if trade_executed_this_run:
+        return
+
+    if len(open_trades) >= MAX_OPEN_TRADES:
+        return
+
+    if get_today_profit() <= DAILY_LOSS_LIMIT:
+        print("?? Êã ÇáæÕæá Åáì ÍÏ ÇáÎÓÇÑÉ ÇáíæãíÉ. áä íÊã ÇáÊÏÇæá.")
+        send_email_alert("?? ÅíŞÇİ ÇáÊÏÇæá Çáíæãí", "Êã ÅíŞÇİ ÇáÊÏÇæá ÈÚÏ ÎÓÇÑÉ 5 ÏæáÇÑ Çáíæã.")
+        return
+
+    if manual_mode:
+        sentiment = analyze_sentiment(f"Manual trade for {manual_symbol}")
+        entry_price = get_real_price(manual_symbol)
+        trade = {
+            'symbol': manual_symbol,
+            'entry_price': entry_price,
+            'quantity': manual_quantity,
+            'side': manual_side,
+            'sentiment': sentiment,
+            'highest_price': entry_price,
+            'start_time': datetime.now(timezone.utc)
+        }
+        open_trades.append(trade)
+        trade_executed_this_run = True
+
+        msg = f"?? ÏÎæá ÕİŞÉ {manual_symbol}\nÇáäæÚ: {manual_side}\nÇáÓÚÑ: {entry_price}\nÇáßãíÉ: {manual_quantity}\nÇáãÚäæíÇÊ: {sentiment}"
+        print(msg)
+        send_telegram(msg)
+        return
+
+    symbols_to_use = choose_best_symbols()
+
+    for symbol, sentiment in symbols_to_use:
+        if len(open_trades) >= MAX_OPEN_TRADES:
+            break
+
+        entry_price = get_real_price(symbol)
+        quantity = round(10 / entry_price, 6)
+
+        trade = {
+            'symbol': symbol,
+            'entry_price': entry_price,
+            'quantity': quantity,
+            'side': 'buy',
+            'sentiment': sentiment,
+            'highest_price': entry_price,
+            'start_time': datetime.now(timezone.utc)
+        }
+        open_trades.append(trade)
+        trade_executed_this_run = True
+
+        msg = f"?? ÏÎæá ÕİŞÉ {symbol}\nÇáÓÚÑ: {entry_price}\nÇáßãíÉ: {quantity}\nÇáãÚäæíÇÊ: {sentiment}"
+        print(msg)
+        send_telegram(msg)
+
+def monitor_trades():
+    global open_trades
+    now = datetime.now(timezone.utc)
+    updated_trades = []
+
+    for trade in open_trades:
+        current_price = get_real_price(trade['symbol'])
+        entry_price = trade['entry_price']
+        side = trade['side']
+
+        if side == 'buy':
+            if current_price > trade['highest_price']:
+                trade['highest_price'] = current_price
+
+            trailing_stop = trade['highest_price'] * (1 - TRAILING_STOP_PERCENT)
+            reason = ""
+
+            if current_price <= trailing_stop:
+                reason = "?? Êã ÊİÚíá ÇáÊÑíá ÓÊæÈ"
+            elif now - trade['start_time'] > MAX_TRADE_DURATION:
+                reason = "? ÇäÊåÊ ãÏÉ ÇáÕİŞÉ"
+
+            if reason:
+                profit = (current_price - entry_price) * trade['quantity']
+                result = "ÑÈÍ" if profit > 0 else "ÎÓÇÑÉ"
+                msg = f"? Êã ÇáÎÑæÌ ãä ÕİŞÉ {trade['symbol']}\nÇáÓÚÑ: {current_price}\nÇáäÊíÌÉ: {result}\n{reason}"
+                print(msg)
+                send_telegram(msg)
+                cursor.execute('''INSERT INTO trades (timestamp, symbol, side, quantity, entry_price, exit_price, result, sentiment)
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                               (now.isoformat(), trade['symbol'], side, trade['quantity'], entry_price, current_price, result, trade['sentiment']))
+                conn.commit()
+            else:
+                updated_trades.append(trade)
+    open_trades = updated_trades
+
+if __name__ == '__main__':
+    print("?? ÇÎÊÑ æÖÚ ÇáÊÔÛíá:")
+    print("1. ?? ÊÏÇæá ÊáŞÇÆí")
+    print("2. ? ÊÏÇæá íÏæí (ÅÏÎÇá ÑãÒ ÇáÚãáÉ íÏæíğÇ)")
+    choice = input("?? ÃÏÎá ÑŞã ÇáæÖÚ: ").strip()
+
+    if choice == '2':
+        manual_mode = True
+        manual_symbol = input("?? ÃÏÎá ÑãÒ ÇáÚãáÉ (ãËÇá: BTCUSDT): ").strip().upper()
+        if not manual_symbol or not manual_symbol.isalnum():
+            print("? ÑãÒ ÇáÚãáÉ ÛíÑ ÕÇáÍ. ÓíÊã ÇáÊÈÏíá Åáì ÇáæÖÚ ÇáÊáŞÇÆí.")
+            manual_mode = False
+        else:
+            manual_side = input("?? äæÚ ÇáÕİŞÉ (buy/sell): ").strip().lower()
+            if manual_side not in ['buy', 'sell']:
+                print("? äæÚ ÇáÕİŞÉ ÛíÑ ÕÇáÍ. ÓíÊã ÇáÊÈÏíá Åáì ÇáæÖÚ ÇáÊáŞÇÆí.")
+                manual_mode = False
+            else:
+                try:
+                    quantity_input = input("?? ÇáßãíÉ: ").strip()
+                    if not quantity_input or not quantity_input.replace('.', '', 1).isdigit():
+                        raise ValueError()
+                    manual_quantity = float(quantity_input)
+                    if manual_quantity <= 0:
+                        raise ValueError()
+                except:
+                    print("? ÇáßãíÉ ÛíÑ ÕÇáÍÉ. ÓíÊã ÇáÊÈÏíá Åáì ÇáæÖÚ ÇáÊáŞÇÆí.")
+                    manual_mode = False
+
+    print("?? ÊÔÛíá ÇáÈæÊ...\n")
+    while True:
+        try:
+            execute_trades()
+            monitor_trades()
+
+            now = datetime.now(timezone.utc)
+            if now.hour == 23 and now.minute == 59:
+                if last_report_date != now.date():
+                    send_daily_report()
+                    last_report_date = now.date()
+
+            time.sleep(10)
+        except KeyboardInterrupt:
+            print("?? Êã ÅíŞÇİ ÇáÈæÊ íÏæíğÇ.")
+            break
+        except Exception as e:
+            print(f"?? ÎØÃ: {e}")
+            time.sleep(10)

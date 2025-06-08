@@ -1,0 +1,33 @@
+# dashboard.py
+import sqlite3
+import pandas as pd
+import streamlit as st
+
+# الاتصال بقاعدة البيانات
+conn = sqlite3.connect('trading_bot.db', check_same_thread=False)
+st.set_page_config(page_title="لوحة تحكم البوت", layout="wide")
+
+st.title("📊 لوحة تحكم بوت التداول")
+
+# حالة البوت
+status = st.radio("🔘 حالة البوت:", ["✅ يعمل", "⛔️ متوقف"])
+st.info("هذه الحالة يدوية حاليًا، مستقبلاً نربطها تلقائيًا بفلاغ التشغيل.")
+
+# جلب بيانات الصفقات
+df = pd.read_sql_query("SELECT * FROM trades ORDER BY timestamp DESC", conn)
+
+st.subheader("📋 تفاصيل آخر الصفقات")
+st.dataframe(df)
+
+# إحصائيات سريعة
+st.subheader("📈 أداء البوت")
+win_count = df[df['result'] == 'WIN'].shape[0]
+loss_count = df[df['result'] == 'LOSS'].shape[0]
+st.metric("✅ صفقات رابحة", win_count)
+st.metric("❌ صفقات خاسرة", loss_count)
+
+# رسم بياني للأرباح
+df['timestamp'] = pd.to_datetime(df['timestamp'])
+df['P&L'] = df['exit_price'] - df['entry_price']
+df['Cumulative P&L'] = df['P&L'].cumsum()
+st.line_chart(df.set_index('timestamp')['Cumulative P&L'])

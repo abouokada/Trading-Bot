@@ -1,0 +1,4 @@
+python-binance
+vaderSentiment
+python-dotenv
+requests
