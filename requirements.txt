@@ -1,4 +1,5 @@
 python-binance
-vaderSentiment
-python-dotenv
+python-telegram-bot
+ta
+pandas
 requests
